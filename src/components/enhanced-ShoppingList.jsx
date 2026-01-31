@@ -63,6 +63,15 @@ export default function ShoppingList({ addToast, isMobile }) {
     } catch { addToast('Failed to clear', 'error') }
   }
 
+  const clearAll = async () => {
+    if (!window.confirm('Clear entire shopping list? This cannot be undone.')) return
+    try {
+      await fetch('/api/shopping?all=true', { method: 'DELETE' })
+      setItems([])
+      addToast('Shopping list cleared!', 'success')
+    } catch { addToast('Failed to clear', 'error') }
+  }
+
   const generateFromMeals = async () => {
     try {
       setGenerating(true)
@@ -190,6 +199,9 @@ export default function ShoppingList({ addToast, isMobile }) {
                 Clear completed
               </button>
             )}
+            <button onClick={clearAll} style={{ fontSize: '0.7rem', color: '#e74c3c', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+              Clear all
+            </button>
           </div>
         </div>
       )}
