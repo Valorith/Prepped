@@ -1025,7 +1025,7 @@ app.post('/api/settings/api-sources/:id/test', async (req, res) => {
 app.delete('/api/settings/api-sources/:id', async (req, res) => {
   try {
     // Don't allow deleting default sources
-    const builtIn = ['themealdb', 'spoonacular', 'edamam'];
+    const builtIn = ['themealdb', 'spoonacular'];
     if (builtIn.includes(req.params.id)) {
       return res.status(400).json({ error: 'Cannot delete built-in API sources' });
     }
@@ -1367,3 +1367,6 @@ app.listen(PORT, () => {
   console.log(`Enhanced Meal Planner API running on port ${PORT}`);
   console.log(pool ? 'Connected to PostgreSQL database' : 'Using SQLite fallback database');
 });
+
+// Remove Edamam source (no longer supported)
+query("DELETE FROM api_sources WHERE id = 'edamam'").catch(() => {});
