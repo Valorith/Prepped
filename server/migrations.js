@@ -170,6 +170,14 @@ export async function runMigrations() {
       `);
     }
     
+    if (currentVersion < 2) {
+      console.log('Running migration 2: Add import_source to recipes');
+      await pool.query(`
+        ALTER TABLE recipes ADD COLUMN IF NOT EXISTS import_source TEXT DEFAULT '';
+        INSERT INTO migrations (version) VALUES (2);
+      `);
+    }
+    
     console.log('PostgreSQL migrations completed successfully');
   } catch (error) {
     console.error('Migration error:', error);
@@ -280,6 +288,15 @@ function runSQLiteMigrations(db) {
       ALTER TABLE shopping_list ADD COLUMN aisle_id TEXT DEFAULT 'other';
       
       PRAGMA user_version = 5;
+    `);
+  }
+  
+  if (currentVersion < 6) {
+    console.log('Running migration 6: Add import_source to recipes');
+    db.exec(`
+      ALTER TABLE recipes ADD COLUMN import_source TEXT DEFAULT '';
+      
+      PRAGMA user_version = 6;
     `);
   }
 }

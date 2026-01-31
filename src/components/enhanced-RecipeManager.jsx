@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
+import DiscoverRecipes from './DiscoverRecipes.jsx'
 
 const RECIPE_TYPES = ['breakfast', 'lunch', 'dinner', 'snack', 'dessert', 'appetizer']
 const CUISINES = ['', 'american', 'italian', 'mexican', 'asian', 'indian', 'mediterranean', 'french', 'chinese', 'thai', 'japanese', 'korean', 'greek', 'spanish', 'other']
@@ -21,6 +22,7 @@ export default function RecipeManager({ addToast, isMobile }) {
   const [importUrl, setImportUrl] = useState('')
   const [importing, setImporting] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [showDiscover, setShowDiscover] = useState(false)
 
   function emptyForm() {
     return { 
@@ -124,6 +126,7 @@ export default function RecipeManager({ addToast, isMobile }) {
       })
       if (!res.ok) throw new Error((await res.json()).error || 'Import failed')
       const parsed = await res.json()
+      parsed.import_source = 'url'
       setForm(parsed)
       setEditing('new')
       setShowImport(false)
@@ -226,6 +229,12 @@ export default function RecipeManager({ addToast, isMobile }) {
               color: recipe.difficulty === 'easy' ? 'var(--color-success)' : recipe.difficulty === 'hard' ? 'var(--color-danger)' : 'var(--color-accent)' 
             }}>📊 {recipe.difficulty}</span>}
             {totalTime > 0 && <span className="meta-chip">🕐 {totalTime}m</span>}
+            {recipe.import_source === 'themealdb' && (
+              <span className="meta-chip" style={{ background: 'var(--color-primary)', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🍽️ TheMealDB</span>
+            )}
+            {recipe.import_source === 'url' && (
+              <span className="meta-chip" style={{ background: 'var(--color-info)', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🔗 URL Import</span>
+            )}
             {recipe.source_url && (
               <a href={recipe.source_url} target="_blank" rel="noopener noreferrer" className="meta-chip" style={{ textDecoration: 'none', color: 'var(--color-info)' }}>
                 🔗 Source
@@ -375,6 +384,12 @@ export default function RecipeManager({ addToast, isMobile }) {
 
       {/* Tags */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginBottom: '0.5rem' }}>
+        {recipe.import_source === 'themealdb' && (
+          <span className="tag" style={{ fontSize: '0.6rem', background: 'var(--color-primary)', color: '#fff', fontWeight: 600 }}>🍽️ MealDB</span>
+        )}
+        {recipe.import_source === 'url' && (
+          <span className="tag" style={{ fontSize: '0.6rem', background: 'var(--color-info)', color: '#fff', fontWeight: 600 }}>🔗 Imported</span>
+        )}
         {recipe.recipe_type && <span className="tag" style={{ fontSize: '0.65rem' }}>{recipe.recipe_type}</span>}
         {recipe.cuisine_type && <span className="tag" style={{ fontSize: '0.65rem' }}>{recipe.cuisine_type}</span>}
         {recipe.difficulty && (
@@ -417,6 +432,9 @@ export default function RecipeManager({ addToast, isMobile }) {
           </p>
         </div>
         <div className="flex items-center gap-sm">
+          <button onClick={() => setShowDiscover(true)} className="btn btn-accent btn-sm" style={{ background: 'var(--color-primary)', color: '#fff', border: 'none' }}>
+            🌐 Discover
+          </button>
           <button onClick={() => setShowImport(!showImport)} className="btn btn-secondary btn-sm">
             🔗 Import
           </button>
@@ -533,6 +551,19 @@ export default function RecipeManager({ addToast, isMobile }) {
 
       {/* Recipe Detail View */}
       {viewing && <RecipeDetailView recipe={viewing} />}
+
+      {/* Discover Recipes Modal */}
+      {showDiscover && (
+        <DiscoverRecipes
+          addToast={addToast}
+          isMobile={isMobile}
+          onClose={() => setShowDiscover(false)}
+          onImported={(saved) => {
+            setRecipes(prev => [...prev, { ...saved, tags: JSON.parse(saved.tags || '[]'), ingredients: saved.ingredients || [] }])
+            loadRecipes()
+          }}
+        />
+      )}
 
       {/* Recipe Edit Modal */}
       {editing && (

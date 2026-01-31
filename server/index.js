@@ -211,17 +211,17 @@ app.post('/api/recipes', validateRecipe, async (req, res) => {
     const id = uuidv4();
     const { 
       name, description, servings, prep_time, cook_time, instructions, tags, ingredients,
-      calories, protein, carbs, fat, difficulty, cuisine_type, recipe_type, source_url, image_url
+      calories, protein, carbs, fat, difficulty, cuisine_type, recipe_type, source_url, image_url, import_source
     } = req.body;
     
     await query(`INSERT INTO recipes (
       id, name, description, servings, prep_time, cook_time, instructions, tags,
-      calories, protein, carbs, fat, difficulty, cuisine_type, recipe_type, source_url, image_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      calories, protein, carbs, fat, difficulty, cuisine_type, recipe_type, source_url, image_url, import_source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
       id, name, description || '', servings || 4, prep_time || 0, cook_time || 0, 
       instructions || '', JSON.stringify(tags || []), calories || 0, protein || 0, 
       carbs || 0, fat || 0, difficulty || 'medium', cuisine_type || '', recipe_type || 'dinner',
-      source_url || '', image_url || ''
+      source_url || '', image_url || '', import_source || ''
     ]);
     
     if (ingredients?.length) {
@@ -887,6 +887,152 @@ app.get('/api/stats', async (req, res) => {
     res.json(stats);
   } catch (error) {
     handleError(error, req, res);
+  }
+});
+
+// ============ TheMealDB API PROXY ============
+
+const MEALDB_BASE = 'https://www.themealdb.com/api/json/v1/1';
+
+function parseMealDBRecipe(meal) {
+  // Extract ingredients and measures from strIngredient1-20 / strMeasure1-20
+  const ingredients = [];
+  for (let i = 1; i <= 20; i++) {
+    const name = meal[`strIngredient${i}`];
+    const measure = meal[`strMeasure${i}`];
+    if (name && name.trim()) {
+      const measureStr = (measure || '').trim();
+      // Try to extract numeric quantity from measure
+      const qtyMatch = measureStr.match(/^([\d./½¼¾⅓⅔]+)\s*(.*)/);
+      let quantity = 1;
+      let unit = measureStr;
+      if (qtyMatch) {
+        let q = qtyMatch[1].replace('½', '.5').replace('¼', '.25').replace('¾', '.75').replace('⅓', '.33').replace('⅔', '.67');
+        // Handle fractions like "1/2"
+        if (q.includes('/')) {
+          const [num, den] = q.split('/');
+          quantity = parseFloat(num) / parseFloat(den);
+        } else {
+          quantity = parseFloat(q) || 1;
+        }
+        unit = qtyMatch[2] || '';
+      }
+      ingredients.push({ name: name.trim(), quantity, unit, category: 'other' });
+    }
+  }
+
+  const tags = meal.strTags ? meal.strTags.split(',').map(t => t.trim()).filter(Boolean) : [];
+  if (meal.strCategory) tags.push(meal.strCategory);
+
+  return {
+    name: meal.strMeal || '',
+    description: `${meal.strCategory || ''} dish from ${meal.strArea || 'unknown'} cuisine.`,
+    servings: 4,
+    prep_time: 15,
+    cook_time: 30,
+    instructions: meal.strInstructions || '',
+    tags,
+    ingredients,
+    calories: 0, protein: 0, carbs: 0, fat: 0,
+    difficulty: 'medium',
+    cuisine_type: (meal.strArea || '').toLowerCase(),
+    recipe_type: 'dinner',
+    source_url: meal.strSource || meal.strYoutube || '',
+    image_url: meal.strMealThumb || '',
+    import_source: 'themealdb',
+    mealdb_id: meal.idMeal
+  };
+}
+
+// Search TheMealDB by name
+app.get('/api/discover/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) return res.json([]);
+    const response = await fetch(`${MEALDB_BASE}/search.php?s=${encodeURIComponent(q)}`);
+    const data = await response.json();
+    const meals = (data.meals || []).map(parseMealDBRecipe);
+    res.json(meals);
+  } catch (error) {
+    console.error('MealDB search error:', error);
+    res.status(500).json({ error: 'Failed to search recipes' });
+  }
+});
+
+// Get random meal
+app.get('/api/discover/random', async (req, res) => {
+  try {
+    const response = await fetch(`${MEALDB_BASE}/random.php`);
+    const data = await response.json();
+    const meals = (data.meals || []).map(parseMealDBRecipe);
+    res.json(meals);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get random recipe' });
+  }
+});
+
+// List categories
+app.get('/api/discover/categories', async (req, res) => {
+  try {
+    const response = await fetch(`${MEALDB_BASE}/categories.php`);
+    const data = await response.json();
+    res.json(data.categories || []);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load categories' });
+  }
+});
+
+// Filter by category
+app.get('/api/discover/filter/category/:category', async (req, res) => {
+  try {
+    const response = await fetch(`${MEALDB_BASE}/filter.php?c=${encodeURIComponent(req.params.category)}`);
+    const data = await response.json();
+    // Filter returns minimal data — just name, thumb, id
+    res.json((data.meals || []).map(m => ({
+      mealdb_id: m.idMeal,
+      name: m.strMeal,
+      image_url: m.strMealThumb
+    })));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to filter by category' });
+  }
+});
+
+// Filter by area/cuisine
+app.get('/api/discover/filter/area/:area', async (req, res) => {
+  try {
+    const response = await fetch(`${MEALDB_BASE}/filter.php?a=${encodeURIComponent(req.params.area)}`);
+    const data = await response.json();
+    res.json((data.meals || []).map(m => ({
+      mealdb_id: m.idMeal,
+      name: m.strMeal,
+      image_url: m.strMealThumb
+    })));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to filter by area' });
+  }
+});
+
+// List areas (cuisines)
+app.get('/api/discover/areas', async (req, res) => {
+  try {
+    const response = await fetch(`${MEALDB_BASE}/list.php?a=list`);
+    const data = await response.json();
+    res.json((data.meals || []).map(m => m.strArea));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load areas' });
+  }
+});
+
+// Lookup full recipe by MealDB ID
+app.get('/api/discover/lookup/:id', async (req, res) => {
+  try {
+    const response = await fetch(`${MEALDB_BASE}/lookup.php?i=${req.params.id}`);
+    const data = await response.json();
+    if (!data.meals || !data.meals.length) return res.status(404).json({ error: 'Recipe not found' });
+    res.json(parseMealDBRecipe(data.meals[0]));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to lookup recipe' });
   }
 });
 
