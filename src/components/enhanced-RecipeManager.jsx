@@ -292,7 +292,7 @@ export default function RecipeManager({ addToast, isMobile }) {
       onClick={() => lookupDetail(item.mealdb_id)}>
       {item.image_url && (
         <div style={{ width: '100%', height: 120, borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: '0.5rem', background: 'var(--bg-tertiary)' }}>
-          <img src={item.image_url + '/preview'} alt={item.name} loading="lazy"
+          <img src={item.image_url} alt={item.name} loading="lazy"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             onError={e => { e.target.style.display = 'none' }} />
         </div>
@@ -307,7 +307,7 @@ export default function RecipeManager({ addToast, isMobile }) {
       onClick={() => setDetailRecipe(recipe)}>
       {recipe.image_url && (
         <div style={{ width: '100%', height: 130, borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: '0.5rem', background: 'var(--bg-tertiary)' }}>
-          <img src={recipe.image_url + '/preview'} alt={recipe.name} loading="lazy"
+          <img src={recipe.image_url} alt={recipe.name} loading="lazy"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             onError={e => { e.target.style.display = 'none' }} />
         </div>
