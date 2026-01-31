@@ -406,7 +406,7 @@ app.get('/api/meals', async (req, res) => {
     
     if (start && end) {
       const sql = `
-        SELECT mp.*, r.name as recipe_name, r.prep_time, r.cook_time, r.servings, r.difficulty
+        SELECT mp.*, r.name as recipe_name, r.prep_time, r.cook_time, r.servings, r.difficulty, r.image_url as recipe_image
         FROM meal_plan mp 
         LEFT JOIN recipes r ON mp.recipe_id = r.id 
         WHERE mp.date >= ? AND mp.date <= ? 
@@ -465,7 +465,7 @@ app.post('/api/meals', async (req, res) => {
     ]);
     
     const meals = await query(`
-      SELECT mp.*, r.name as recipe_name, r.prep_time, r.cook_time, r.servings 
+      SELECT mp.*, r.name as recipe_name, r.prep_time, r.cook_time, r.servings, r.image_url as recipe_image 
       FROM meal_plan mp 
       LEFT JOIN recipes r ON mp.recipe_id = r.id 
       WHERE mp.id = ?
@@ -490,7 +490,7 @@ app.put('/api/meals/:id', async (req, res) => {
     }
     
     const meals = await query(`
-      SELECT mp.*, r.name as recipe_name, r.prep_time, r.cook_time, r.servings 
+      SELECT mp.*, r.name as recipe_name, r.prep_time, r.cook_time, r.servings, r.image_url as recipe_image 
       FROM meal_plan mp 
       LEFT JOIN recipes r ON mp.recipe_id = r.id 
       WHERE mp.id = ?

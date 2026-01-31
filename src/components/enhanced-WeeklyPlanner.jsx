@@ -52,7 +52,7 @@ export default function WeeklyPlanner({ addToast, isMobile }) {
       const [mealsData, recipesData, templatesData] = await Promise.all([
         mealsRes.json(), recipesRes.json(), templatesRes.json()
       ])
-      setMeals(mealsData)
+      setMeals((mealsData || []).map(m => ({ ...m, date: typeof m.date === 'string' ? m.date.split('T')[0] : new Date(m.date).toISOString().split('T')[0] })))
       setRecipes(recipesData)
       setTemplates(templatesData)
     } catch { addToast('Failed to load meal plan data', 'error') }
@@ -77,7 +77,8 @@ export default function WeeklyPlanner({ addToast, isMobile }) {
       const res = await fetch('/api/meals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if (!res.ok) throw new Error()
       const meal = await res.json()
-      setMeals(prev => [...prev, meal])
+      const normalizedMeal = { ...meal, date: typeof meal.date === 'string' ? meal.date.split('T')[0] : new Date(meal.date).toISOString().split('T')[0] }
+      setMeals(prev => [...prev, normalizedMeal])
       setAdding(null)
       setForm({ recipe_id: '', custom_name: '', notes: '' })
       setRecipeSearch('')
@@ -141,7 +142,8 @@ export default function WeeklyPlanner({ addToast, isMobile }) {
         body: JSON.stringify({ ...draggedMeal, date: targetDate, meal_type: targetMealType })
       })
       const updatedMeal = await res.json()
-      setMeals(prev => prev.map(m => m.id === updatedMeal.id ? updatedMeal : m))
+      const normalizedUpdated = { ...updatedMeal, date: typeof updatedMeal.date === 'string' ? updatedMeal.date.split('T')[0] : new Date(updatedMeal.date).toISOString().split('T')[0] }
+      setMeals(prev => prev.map(m => m.id === normalizedUpdated.id ? normalizedUpdated : m))
       addToast('Meal moved!', 'success')
     } catch { addToast('Failed to move meal', 'error') }
     finally { setDraggedMeal(null) }
@@ -182,15 +184,22 @@ export default function WeeklyPlanner({ addToast, isMobile }) {
         background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)', padding: '0.4rem 0.5rem',
         marginBottom: '0.25rem', borderLeft: `3px solid ${MEAL_COLORS[meal.meal_type] || 'var(--border-primary)'}`,
         position: 'relative', cursor: 'move', transition: 'all 0.15s ease',
-        fontSize: '0.8rem'
+        fontSize: '0.8rem', display: 'flex', gap: '0.4rem', alignItems: 'flex-start'
       }}
       className="meal-card">
-      <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.1rem', paddingRight: '1rem' }}>
-        {meal.recipe_name || meal.custom_name || 'Untitled'}
-      </div>
-      <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
-        {meal.prep_time && meal.cook_time ? `${meal.prep_time + meal.cook_time}m` : ''}
-        {meal.servings ? ` • ${meal.servings} srv` : ''}
+      {meal.recipe_image && (
+        <img src={meal.recipe_image} alt="" style={{
+          width: 32, height: 32, borderRadius: 'var(--radius-sm)', objectFit: 'cover', flexShrink: 0
+        }} />
+      )}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.1rem', paddingRight: '1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {meal.recipe_name || meal.custom_name || 'Untitled'}
+        </div>
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+          {meal.prep_time && meal.cook_time ? `${meal.prep_time + meal.cook_time}m` : ''}
+          {meal.servings ? ` • ${meal.servings} srv` : ''}
+        </div>
       </div>
       <button onClick={() => removeMeal(meal.id)} className="btn-ghost"
         style={{ position: 'absolute', top: 2, right: 4, padding: 0, minHeight: 16, width: 16, fontSize: 12, color: 'var(--text-muted)' }}>×</button>
