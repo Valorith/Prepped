@@ -25,6 +25,7 @@ export default function RecipeManager({ addToast, isMobile }) {
   const [discoverQuery, setDiscoverQuery] = useState('')
   const [discoverResults, setDiscoverResults] = useState([])
   const [discoverLoading, setDiscoverLoading] = useState(false)
+  const [sourceWarnings, setSourceWarnings] = useState([])
   const [categories, setCategories] = useState([])
   const [areas, setAreas] = useState([])
   const [selectedCategory, setSelectedCategory] = useState(null)
@@ -66,7 +67,7 @@ export default function RecipeManager({ addToast, isMobile }) {
         fetch('/api/discover/random').then(r => r.json()),
         fetch('/api/discover/random').then(r => r.json()),
       ])
-      setFeaturedRecipes(results.map(r => r[0]).filter(Boolean))
+      setFeaturedRecipes(results.flatMap(r => (r.results || r)).slice(0, 3).filter(Boolean))
     } catch {} 
     finally { setFeaturedLoading(false) }
   }
@@ -91,11 +92,14 @@ export default function RecipeManager({ addToast, isMobile }) {
     setDiscoverLoading(true)
     setSelectedCategory(null)
     setSelectedArea(null)
+    setSourceWarnings([])
     try {
       const res = await fetch(`/api/discover/search?q=${encodeURIComponent(discoverQuery)}`)
       const data = await res.json()
-      setDiscoverResults(data)
-      if (!data.length) addToast('No recipes found', 'info')
+      const items = data.results || data
+      setDiscoverResults(items)
+      if (data.warnings?.length) setSourceWarnings(data.warnings)
+      if (!items.length) addToast('No recipes found', 'info')
     } catch { addToast('Search failed', 'error') }
     finally { setDiscoverLoading(false) }
   }, [discoverQuery])
@@ -104,9 +108,13 @@ export default function RecipeManager({ addToast, isMobile }) {
     setSelectedCategory(cat)
     setSelectedArea(null)
     setDiscoverLoading(true)
+    setSourceWarnings([])
     try {
       const res = await fetch(`/api/discover/filter/category/${encodeURIComponent(cat)}`)
-      setDiscoverResults(await res.json())
+      const data = await res.json()
+      const items = data.results || data
+      setDiscoverResults(items)
+      if (data.warnings?.length) setSourceWarnings(data.warnings)
     } catch { addToast('Failed to load category', 'error') }
     finally { setDiscoverLoading(false) }
   }
@@ -115,14 +123,24 @@ export default function RecipeManager({ addToast, isMobile }) {
     setSelectedArea(area)
     setSelectedCategory(null)
     setDiscoverLoading(true)
+    setSourceWarnings([])
     try {
       const res = await fetch(`/api/discover/filter/area/${encodeURIComponent(area)}`)
-      setDiscoverResults(await res.json())
+      const data = await res.json()
+      const items = data.results || data
+      setDiscoverResults(items)
+      if (data.warnings?.length) setSourceWarnings(data.warnings)
     } catch { addToast('Failed to load cuisine', 'error') }
     finally { setDiscoverLoading(false) }
   }
 
-  const lookupDetail = async (mealdbId) => {
+  const lookupDetail = async (item) => {
+    // If item already has full data (spoonacular results), show directly
+    if (typeof item === 'object' && (item.ingredients?.length > 0 || item.source_api === 'spoonacular')) {
+      setDetailRecipe(item)
+      return
+    }
+    const mealdbId = typeof item === 'object' ? item.mealdb_id : item
     setDetailLoading(true)
     try {
       const res = await fetch(`/api/discover/lookup/${mealdbId}`)
@@ -133,19 +151,24 @@ export default function RecipeManager({ addToast, isMobile }) {
 
   const getRandom = async () => {
     setDiscoverLoading(true)
+    setSourceWarnings([])
     try {
       const res = await fetch('/api/discover/random')
       const data = await res.json()
-      if (data.length) setDetailRecipe(data[0])
+      const items = data.results || data
+      if (data.warnings?.length) setSourceWarnings(data.warnings)
+      if (items.length) setDetailRecipe(items[Math.floor(Math.random() * items.length)])
     } catch { addToast('Failed to get random recipe', 'error') }
     finally { setDiscoverLoading(false) }
   }
 
   const importRecipe = async (recipe) => {
-    setImportingId(recipe.mealdb_id || 'url')
+    setImportingId(recipe.mealdb_id || recipe.spoonacular_id || 'url')
     try {
       const payload = { ...recipe }
       delete payload.mealdb_id
+      delete payload.spoonacular_id
+      delete payload.source_api
       const res = await fetch('/api/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -286,10 +309,23 @@ export default function RecipeManager({ addToast, isMobile }) {
     )
   }
 
+  const SourceBadge = ({ source }) => {
+    const isSpoon = source === 'spoonacular'
+    return (
+      <span style={{
+        display: 'inline-block', fontSize: '0.55rem', fontWeight: 600, padding: '0.1rem 0.35rem',
+        borderRadius: '9999px', background: isSpoon ? '#ff6b35' : '#4ecdc4', color: '#fff',
+        whiteSpace: 'nowrap'
+      }}>
+        {isSpoon ? '🥄 Spoonacular' : '🍽️ MealDB'}
+      </span>
+    )
+  }
+
   // Discover thumbnail card
   const DiscoverThumbCard = ({ item }) => (
     <div className="card" style={{ cursor: 'pointer', padding: '0.75rem', transition: 'all 0.15s' }}
-      onClick={() => lookupDetail(item.mealdb_id)}>
+      onClick={() => lookupDetail(item)}>
       {item.image_url && (
         <div style={{ width: '100%', height: 120, borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: '0.5rem', background: 'var(--bg-tertiary)' }}>
           <img src={item.image_url} alt={item.name} loading="lazy"
@@ -297,7 +333,10 @@ export default function RecipeManager({ addToast, isMobile }) {
             onError={e => { e.target.style.display = 'none' }} />
         </div>
       )}
-      <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>{item.name}</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.25rem' }}>
+        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', flex: 1 }}>{item.name}</div>
+        <SourceBadge source={item.source_api || 'themealdb'} />
+      </div>
     </div>
   )
 
@@ -312,7 +351,10 @@ export default function RecipeManager({ addToast, isMobile }) {
             onError={e => { e.target.style.display = 'none' }} />
         </div>
       )}
-      <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>{recipe.name}</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem', gap: '0.25rem' }}>
+        <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)', flex: 1 }}>{recipe.name}</div>
+        <SourceBadge source={recipe.source_api || 'themealdb'} />
+      </div>
       <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
         {recipe.cuisine_type && <span>🌍 {recipe.cuisine_type} </span>}
         {recipe.ingredients?.length > 0 && <span>• {recipe.ingredients.length} ingredients</span>}
@@ -372,7 +414,10 @@ export default function RecipeManager({ addToast, isMobile }) {
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.25rem', marginBottom: '0.5rem' }}>
         {recipe.import_source === 'themealdb' && (
-          <span className="tag" style={{ fontSize: '0.6rem', background: 'var(--color-primary)', color: '#fff', fontWeight: 600 }}>🍽️ MealDB</span>
+          <span className="tag" style={{ fontSize: '0.6rem', background: '#4ecdc4', color: '#fff', fontWeight: 600 }}>🍽️ MealDB</span>
+        )}
+        {recipe.import_source === 'spoonacular' && (
+          <span className="tag" style={{ fontSize: '0.6rem', background: '#ff6b35', color: '#fff', fontWeight: 600 }}>🥄 Spoonacular</span>
         )}
         {recipe.import_source === 'url' && (
           <span className="tag" style={{ fontSize: '0.6rem', background: 'var(--color-info)', color: '#fff', fontWeight: 600 }}>🔗 Imported</span>
@@ -419,7 +464,8 @@ export default function RecipeManager({ addToast, isMobile }) {
           )}
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
-            {r.mealdb_id && <span className="meta-chip" style={{ background: 'var(--color-primary)', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🍽️ TheMealDB</span>}
+            {(r.mealdb_id || r.source_api === 'themealdb') && <span className="meta-chip" style={{ background: '#4ecdc4', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🍽️ TheMealDB</span>}
+            {(r.spoonacular_id || r.source_api === 'spoonacular') && <span className="meta-chip" style={{ background: '#ff6b35', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🥄 Spoonacular</span>}
             {r.import_source === 'url' && <span className="meta-chip" style={{ background: 'var(--color-info)', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🔗 URL Import</span>}
             {r.cuisine_type && <span className="meta-chip">🌍 {r.cuisine_type}</span>}
             {r.tags?.slice(0, 4).map((t, i) => <span key={i} className="tag">{t}</span>)}
@@ -503,7 +549,8 @@ export default function RecipeManager({ addToast, isMobile }) {
             {recipe.cuisine_type && <span className="meta-chip">🌍 {recipe.cuisine_type}</span>}
             {recipe.difficulty && <span className="meta-chip" style={{ color: recipe.difficulty === 'easy' ? 'var(--color-success)' : recipe.difficulty === 'hard' ? 'var(--color-danger)' : 'var(--color-accent)' }}>📊 {recipe.difficulty}</span>}
             {totalTime > 0 && <span className="meta-chip">🕐 {totalTime}m</span>}
-            {recipe.import_source === 'themealdb' && <span className="meta-chip" style={{ background: 'var(--color-primary)', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🍽️ TheMealDB</span>}
+            {recipe.import_source === 'themealdb' && <span className="meta-chip" style={{ background: '#4ecdc4', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🍽️ TheMealDB</span>}
+            {recipe.import_source === 'spoonacular' && <span className="meta-chip" style={{ background: '#ff6b35', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🥄 Spoonacular</span>}
             {recipe.import_source === 'url' && <span className="meta-chip" style={{ background: 'var(--color-info)', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>🔗 URL Import</span>}
             {recipe.source_url && <a href={recipe.source_url} target="_blank" rel="noopener noreferrer" className="meta-chip" style={{ textDecoration: 'none', color: 'var(--color-info)' }}>🔗 Source</a>}
           </div>
@@ -656,7 +703,7 @@ export default function RecipeManager({ addToast, isMobile }) {
               </button>
             </div>
             <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Browse free recipes from TheMealDB — search, pick a category, or try your luck with random!
+              Browse recipes from multiple sources — search, pick a category, or try your luck with random!
             </p>
           </div>
 
@@ -729,6 +776,12 @@ export default function RecipeManager({ addToast, isMobile }) {
             <div className="empty-state">
               <div className="loader" style={{ margin: '0 auto 1rem', width: 32, height: 32 }}></div>
               <p className="text-secondary">Searching recipes...</p>
+            </div>
+          )}
+
+          {sourceWarnings.length > 0 && (
+            <div style={{ marginBottom: '0.75rem', padding: '0.5rem 0.75rem', background: 'rgba(255,171,0,0.1)', border: '1px solid rgba(255,171,0,0.3)', borderRadius: 'var(--radius-md)', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              ⚠️ {sourceWarnings.map(w => `${w.source}: ${w.error}`).join(' | ')}
             </div>
           )}
 

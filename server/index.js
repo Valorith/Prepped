@@ -1045,6 +1045,103 @@ async function getEnabledSources() {
   return await query(`SELECT * FROM api_sources WHERE enabled = ${enabledVal}`, []);
 }
 
+// ============ API SOURCE HELPERS ============
+
+async function incrementSourceRequests(sourceId) {
+  try {
+    await query(
+      pool
+        ? `UPDATE api_sources SET requests_today = requests_today + 1, updated_at = NOW() WHERE id = $1`
+        : `UPDATE api_sources SET requests_today = requests_today + 1, updated_at = datetime('now') WHERE id = ?`,
+      [sourceId]
+    );
+  } catch (e) {
+    console.error('Failed to increment requests for', sourceId, e.message);
+  }
+}
+
+function getSourceByName(sources, name) {
+  return sources.find(s => s.name?.toLowerCase() === name.toLowerCase() || s.id === name);
+}
+
+// ============ SPOONACULAR API HELPERS ============
+
+const SPOONACULAR_BASE = 'https://api.spoonacular.com';
+
+function parseSpoonacularRecipe(recipe) {
+  const ingredients = (recipe.extendedIngredients || []).map(ing => ({
+    name: ing.name || ing.originalName || '',
+    quantity: ing.amount || 0,
+    unit: ing.unit || ''
+  }));
+
+  let instructions = '';
+  if (recipe.analyzedInstructions?.length > 0) {
+    instructions = recipe.analyzedInstructions[0].steps
+      ?.map(s => `${s.number}. ${s.step}`)
+      .join('\n') || '';
+  }
+  if (!instructions && recipe.instructions) {
+    instructions = recipe.instructions.replace(/<[^>]+>/g, '');
+  }
+
+  const tags = [];
+  if (recipe.dishTypes) tags.push(...recipe.dishTypes.slice(0, 3));
+  if (recipe.diets) tags.push(...recipe.diets.slice(0, 2));
+
+  return {
+    name: recipe.title || '',
+    description: recipe.summary ? recipe.summary.replace(/<[^>]+>/g, '').slice(0, 200) + '...' : '',
+    servings: recipe.servings || 4,
+    prep_time: recipe.preparationMinutes || 15,
+    cook_time: recipe.cookingMinutes || recipe.readyInMinutes || 30,
+    instructions,
+    tags,
+    ingredients,
+    calories: 0, protein: 0, carbs: 0, fat: 0,
+    difficulty: recipe.readyInMinutes > 60 ? 'hard' : recipe.readyInMinutes > 30 ? 'medium' : 'easy',
+    cuisine_type: (recipe.cuisines?.[0] || '').toLowerCase(),
+    recipe_type: recipe.dishTypes?.[0] || 'dinner',
+    source_url: recipe.sourceUrl || '',
+    image_url: recipe.image || '',
+    import_source: 'spoonacular',
+    source_api: 'spoonacular',
+    spoonacular_id: String(recipe.id)
+  };
+}
+
+async function spoonacularSearch(apiKey, searchQuery) {
+  const url = `${SPOONACULAR_BASE}/recipes/complexSearch?query=${encodeURIComponent(searchQuery)}&number=10&addRecipeInformation=true&fillIngredients=true&apiKey=${apiKey}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Spoonacular API error: ${response.status}`);
+  const data = await response.json();
+  return (data.results || []).map(parseSpoonacularRecipe);
+}
+
+async function spoonacularRandom(apiKey, count = 3) {
+  const url = `${SPOONACULAR_BASE}/recipes/random?number=${count}&apiKey=${apiKey}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Spoonacular API error: ${response.status}`);
+  const data = await response.json();
+  return (data.recipes || []).map(parseSpoonacularRecipe);
+}
+
+async function spoonacularFilterByCuisine(apiKey, cuisine) {
+  const url = `${SPOONACULAR_BASE}/recipes/complexSearch?cuisine=${encodeURIComponent(cuisine)}&number=10&addRecipeInformation=true&fillIngredients=true&apiKey=${apiKey}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Spoonacular API error: ${response.status}`);
+  const data = await response.json();
+  return (data.results || []).map(parseSpoonacularRecipe);
+}
+
+async function spoonacularFilterByType(apiKey, type) {
+  const url = `${SPOONACULAR_BASE}/recipes/complexSearch?type=${encodeURIComponent(type)}&number=10&addRecipeInformation=true&fillIngredients=true&apiKey=${apiKey}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Spoonacular API error: ${response.status}`);
+  const data = await response.json();
+  return (data.results || []).map(parseSpoonacularRecipe);
+}
+
 // ============ TheMealDB API PROXY ============
 
 const MEALDB_BASE = 'https://www.themealdb.com/api/json/v1/1';
@@ -1095,32 +1192,92 @@ function parseMealDBRecipe(meal) {
     source_url: meal.strSource || meal.strYoutube || '',
     image_url: meal.strMealThumb || '',
     import_source: 'themealdb',
+    source_api: 'themealdb',
     mealdb_id: meal.idMeal
   };
 }
 
-// Search TheMealDB by name
+// Search — queries all enabled sources in parallel
 app.get('/api/discover/search', async (req, res) => {
   try {
     const { q } = req.query;
-    if (!q) return res.json([]);
-    const response = await fetch(`${MEALDB_BASE}/search.php?s=${encodeURIComponent(q)}`);
-    const data = await response.json();
-    const meals = (data.meals || []).map(parseMealDBRecipe);
-    res.json(meals);
+    if (!q) return res.json({ results: [], warnings: [] });
+    
+    const sources = await getEnabledSources();
+    const promises = [];
+    const warnings = [];
+    
+    // TheMealDB (always available, no key needed)
+    const mealdbSource = getSourceByName(sources, 'themealdb');
+    if (mealdbSource) {
+      promises.push(
+        fetch(`${MEALDB_BASE}/search.php?s=${encodeURIComponent(q)}`)
+          .then(r => r.json())
+          .then(data => {
+            incrementSourceRequests(mealdbSource.id);
+            return (data.meals || []).map(parseMealDBRecipe);
+          })
+          .catch(err => { warnings.push({ source: 'themealdb', error: err.message }); return []; })
+      );
+    }
+    
+    // Spoonacular (needs API key)
+    const spoonSource = getSourceByName(sources, 'spoonacular');
+    if (spoonSource && spoonSource.api_key) {
+      promises.push(
+        spoonacularSearch(spoonSource.api_key, q)
+          .then(results => { incrementSourceRequests(spoonSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'spoonacular', error: err.message }); return []; })
+      );
+    }
+    
+    const resultArrays = await Promise.all(promises);
+    // Interleave results from different sources
+    const combined = [];
+    const maxLen = Math.max(...resultArrays.map(a => a.length), 0);
+    for (let i = 0; i < maxLen; i++) {
+      for (const arr of resultArrays) {
+        if (i < arr.length) combined.push(arr[i]);
+      }
+    }
+    
+    res.json({ results: combined, warnings });
   } catch (error) {
-    console.error('MealDB search error:', error);
+    console.error('Multi-source search error:', error);
     res.status(500).json({ error: 'Failed to search recipes' });
   }
 });
 
-// Get random meal
+// Get random meal — queries all enabled sources
 app.get('/api/discover/random', async (req, res) => {
   try {
-    const response = await fetch(`${MEALDB_BASE}/random.php`);
-    const data = await response.json();
-    const meals = (data.meals || []).map(parseMealDBRecipe);
-    res.json(meals);
+    const sources = await getEnabledSources();
+    const promises = [];
+    const warnings = [];
+    
+    const mealdbSource = getSourceByName(sources, 'themealdb');
+    if (mealdbSource) {
+      promises.push(
+        fetch(`${MEALDB_BASE}/random.php`)
+          .then(r => r.json())
+          .then(data => { incrementSourceRequests(mealdbSource.id); return (data.meals || []).map(parseMealDBRecipe); })
+          .catch(err => { warnings.push({ source: 'themealdb', error: err.message }); return []; })
+      );
+    }
+    
+    const spoonSource = getSourceByName(sources, 'spoonacular');
+    if (spoonSource && spoonSource.api_key) {
+      promises.push(
+        spoonacularRandom(spoonSource.api_key, 2)
+          .then(results => { incrementSourceRequests(spoonSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'spoonacular', error: err.message }); return []; })
+      );
+    }
+    
+    const resultArrays = await Promise.all(promises);
+    const combined = resultArrays.flat();
+    
+    res.json({ results: combined, warnings });
   } catch (error) {
     res.status(500).json({ error: 'Failed to get random recipe' });
   }
@@ -1137,32 +1294,79 @@ app.get('/api/discover/categories', async (req, res) => {
   }
 });
 
-// Filter by category
+// Filter by category — queries both sources
 app.get('/api/discover/filter/category/:category', async (req, res) => {
   try {
-    const response = await fetch(`${MEALDB_BASE}/filter.php?c=${encodeURIComponent(req.params.category)}`);
-    const data = await response.json();
-    // Filter returns minimal data — just name, thumb, id
-    res.json((data.meals || []).map(m => ({
-      mealdb_id: m.idMeal,
-      name: m.strMeal,
-      image_url: m.strMealThumb
-    })));
+    const sources = await getEnabledSources();
+    const promises = [];
+    const warnings = [];
+    
+    const mealdbSource = getSourceByName(sources, 'themealdb');
+    if (mealdbSource) {
+      promises.push(
+        fetch(`${MEALDB_BASE}/filter.php?c=${encodeURIComponent(req.params.category)}`)
+          .then(r => r.json())
+          .then(data => {
+            incrementSourceRequests(mealdbSource.id);
+            return (data.meals || []).map(m => ({
+              mealdb_id: m.idMeal, name: m.strMeal, image_url: m.strMealThumb, source_api: 'themealdb'
+            }));
+          })
+          .catch(err => { warnings.push({ source: 'themealdb', error: err.message }); return []; })
+      );
+    }
+    
+    const spoonSource = getSourceByName(sources, 'spoonacular');
+    if (spoonSource && spoonSource.api_key) {
+      promises.push(
+        spoonacularFilterByType(spoonSource.api_key, req.params.category.toLowerCase())
+          .then(results => { incrementSourceRequests(spoonSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'spoonacular', error: err.message }); return []; })
+      );
+    }
+    
+    const resultArrays = await Promise.all(promises);
+    const combined = resultArrays.flat();
+    res.json({ results: combined, warnings });
   } catch (error) {
     res.status(500).json({ error: 'Failed to filter by category' });
   }
 });
 
-// Filter by area/cuisine
+// Filter by area/cuisine — queries both sources
 app.get('/api/discover/filter/area/:area', async (req, res) => {
   try {
-    const response = await fetch(`${MEALDB_BASE}/filter.php?a=${encodeURIComponent(req.params.area)}`);
-    const data = await response.json();
-    res.json((data.meals || []).map(m => ({
-      mealdb_id: m.idMeal,
-      name: m.strMeal,
-      image_url: m.strMealThumb
-    })));
+    const sources = await getEnabledSources();
+    const promises = [];
+    const warnings = [];
+    
+    const mealdbSource = getSourceByName(sources, 'themealdb');
+    if (mealdbSource) {
+      promises.push(
+        fetch(`${MEALDB_BASE}/filter.php?a=${encodeURIComponent(req.params.area)}`)
+          .then(r => r.json())
+          .then(data => {
+            incrementSourceRequests(mealdbSource.id);
+            return (data.meals || []).map(m => ({
+              mealdb_id: m.idMeal, name: m.strMeal, image_url: m.strMealThumb, source_api: 'themealdb'
+            }));
+          })
+          .catch(err => { warnings.push({ source: 'themealdb', error: err.message }); return []; })
+      );
+    }
+    
+    const spoonSource = getSourceByName(sources, 'spoonacular');
+    if (spoonSource && spoonSource.api_key) {
+      promises.push(
+        spoonacularFilterByCuisine(spoonSource.api_key, req.params.area)
+          .then(results => { incrementSourceRequests(spoonSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'spoonacular', error: err.message }); return []; })
+      );
+    }
+    
+    const resultArrays = await Promise.all(promises);
+    const combined = resultArrays.flat();
+    res.json({ results: combined, warnings });
   } catch (error) {
     res.status(500).json({ error: 'Failed to filter by area' });
   }
