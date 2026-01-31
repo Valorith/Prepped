@@ -149,14 +149,20 @@ export default function DiscoverRecipes({ addToast, isMobile, onClose, onImporte
   }
 
   const SourceBadge = ({ source }) => {
-    const isSpoon = source === 'spoonacular'
+    const config = {
+      spoonacular: { bg: '#ff6b35', label: '🥄 Spoonacular' },
+      themealdb: { bg: '#4ecdc4', label: '🍽️ MealDB' },
+      dummyjson: { bg: '#8b5cf6', label: '🧪 DummyJSON' },
+      thecocktaildb: { bg: '#f472b6', label: '🍸 CocktailDB' },
+    }
+    const { bg, label } = config[source] || config.themealdb
     return (
       <span style={{
         display: 'inline-block', fontSize: '0.6rem', fontWeight: 600, padding: '0.15rem 0.4rem',
-        borderRadius: '9999px', background: isSpoon ? '#ff6b35' : '#4ecdc4', color: '#fff',
+        borderRadius: '9999px', background: bg, color: '#fff',
         whiteSpace: 'nowrap'
       }}>
-        {isSpoon ? '🥄 Spoonacular' : '🍽️ MealDB'}
+        {label}
       </span>
     )
   }
@@ -167,7 +173,7 @@ export default function DiscoverRecipes({ addToast, isMobile, onClose, onImporte
       onClick={() => lookupDetail(item)}>
       {item.image_url && (
         <div style={{ width: '100%', height: 120, borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: '0.5rem', background: 'var(--bg-tertiary)' }}>
-          <img src={item.image_url + (item.source_api !== 'spoonacular' ? '/preview' : '')} alt={item.name} loading="lazy"
+          <img src={item.image_url + (item.source_api === 'themealdb' || item.source_api === 'thecocktaildb' ? '/preview' : '')} alt={item.name} loading="lazy"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             onError={e => { e.target.style.display = 'none' }} />
         </div>
@@ -185,7 +191,7 @@ export default function DiscoverRecipes({ addToast, isMobile, onClose, onImporte
       onClick={() => setDetailRecipe(recipe)}>
       {recipe.image_url && (
         <div style={{ width: '100%', height: 130, borderRadius: 'var(--radius-md)', overflow: 'hidden', marginBottom: '0.5rem', background: 'var(--bg-tertiary)' }}>
-          <img src={recipe.image_url + (recipe.source_api !== 'spoonacular' ? '/preview' : '')} alt={recipe.name} loading="lazy"
+          <img src={recipe.image_url + (recipe.source_api === 'themealdb' || recipe.source_api === 'thecocktaildb' ? '/preview' : '')} alt={recipe.name} loading="lazy"
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             onError={e => { e.target.style.display = 'none' }} />
         </div>
@@ -229,8 +235,8 @@ export default function DiscoverRecipes({ addToast, isMobile, onClose, onImporte
 
           {/* Source badge */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
-            <span className="meta-chip" style={{ background: r.source_api === 'spoonacular' ? '#ff6b35' : 'var(--color-primary)', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>
-              {r.source_api === 'spoonacular' ? '🥄 Spoonacular' : '🍽️ TheMealDB'}
+            <span className="meta-chip" style={{ background: { spoonacular: '#ff6b35', dummyjson: '#8b5cf6', thecocktaildb: '#f472b6' }[r.source_api] || 'var(--color-primary)', color: '#fff', fontWeight: 600, fontSize: '0.7rem' }}>
+              {{ spoonacular: '🥄 Spoonacular', dummyjson: '🧪 DummyJSON', thecocktaildb: '🍸 CocktailDB' }[r.source_api] || '🍽️ TheMealDB'}
             </span>
             {r.cuisine_type && <span className="meta-chip">🌍 {r.cuisine_type}</span>}
             {r.tags?.slice(0, 4).map((t, i) => <span key={i} className="tag">{t}</span>)}

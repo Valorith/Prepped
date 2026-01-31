@@ -60,13 +60,8 @@ async function query(sql, params = []) {
     if (sql.includes('INSERT') || sql.includes('UPDATE') || sql.includes('DELETE')) {
       const stmt = db.prepare(sql);
       return stmt.run(...params);
-    } else if (sql.includes('SELECT') && sql.toUpperCase().includes('LIMIT 1') || sql.includes('WHERE') && sql.includes('=')) {
-      // For single record queries
-      const stmt = db.prepare(sql);
-      const result = stmt.get(...params);
-      return result ? [result] : [];
     } else {
-      // For multiple records
+      // For SELECT queries — always return array
       const stmt = db.prepare(sql);
       return stmt.all(...params);
     }
@@ -986,6 +981,16 @@ app.post('/api/settings/api-sources/:id/test', async (req, res) => {
           if (resp.status === 401 || resp.status === 403) { success = false; message = 'Invalid API key.'; }
           else { const data = await resp.json(); success = resp.ok && data.recipes?.length > 0; message = success ? 'Connected successfully!' : 'Connected but unexpected response.'; }
         }
+      } else if (source.id === 'dummyjson' || source.base_url.includes('dummyjson.com')) {
+        const resp = await fetch(`https://dummyjson.com/recipes?limit=1`, { signal: AbortSignal.timeout(8000) });
+        const data = await resp.json();
+        success = resp.ok && data.recipes && data.recipes.length > 0;
+        message = success ? `Connected! ${data.total} recipes available.` : 'Connected but no results returned.';
+      } else if (source.id === 'thecocktaildb' || source.base_url.includes('thecocktaildb.com')) {
+        const resp = await fetch(`${COCKTAILDB_BASE}/search.php?s=margarita`, { signal: AbortSignal.timeout(8000) });
+        const data = await resp.json();
+        success = resp.ok && data.drinks && data.drinks.length > 0;
+        message = success ? `Connected! Found ${data.drinks.length} drinks.` : 'Connected but no results returned.';
       } else if (source.id === 'edamam' || source.base_url.includes('edamam.com')) {
         if (!source.api_key) { success = false; message = 'API key (app_id|app_key format) required.'; }
         else {
@@ -1025,7 +1030,7 @@ app.post('/api/settings/api-sources/:id/test', async (req, res) => {
 app.delete('/api/settings/api-sources/:id', async (req, res) => {
   try {
     // Don't allow deleting default sources
-    const builtIn = ['themealdb', 'spoonacular'];
+    const builtIn = ['themealdb', 'spoonacular', 'dummyjson', 'thecocktaildb'];
     if (builtIn.includes(req.params.id)) {
       return res.status(400).json({ error: 'Cannot delete built-in API sources' });
     }
@@ -1231,6 +1236,26 @@ app.get('/api/discover/search', async (req, res) => {
       );
     }
     
+    // DummyJSON (no key needed)
+    const dummyjsonSource = getSourceByName(sources, 'dummyjson');
+    if (dummyjsonSource) {
+      promises.push(
+        dummyjsonSearch(q)
+          .then(results => { incrementSourceRequests(dummyjsonSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'dummyjson', error: err.message }); return []; })
+      );
+    }
+    
+    // TheCocktailDB (no key needed)
+    const cocktailSource = getSourceByName(sources, 'thecocktaildb');
+    if (cocktailSource) {
+      promises.push(
+        cocktaildbSearch(q)
+          .then(results => { incrementSourceRequests(cocktailSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'thecocktaildb', error: err.message }); return []; })
+      );
+    }
+    
     const resultArrays = await Promise.all(promises);
     // Interleave results from different sources
     const combined = [];
@@ -1271,6 +1296,26 @@ app.get('/api/discover/random', async (req, res) => {
         spoonacularRandom(spoonSource.api_key, 2)
           .then(results => { incrementSourceRequests(spoonSource.id); return results; })
           .catch(err => { warnings.push({ source: 'spoonacular', error: err.message }); return []; })
+      );
+    }
+    
+    // DummyJSON random
+    const dummyjsonSource = getSourceByName(sources, 'dummyjson');
+    if (dummyjsonSource) {
+      promises.push(
+        dummyjsonRandom(2)
+          .then(results => { incrementSourceRequests(dummyjsonSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'dummyjson', error: err.message }); return []; })
+      );
+    }
+    
+    // CocktailDB random
+    const cocktailSource = getSourceByName(sources, 'thecocktaildb');
+    if (cocktailSource) {
+      promises.push(
+        cocktaildbRandom(1)
+          .then(results => { incrementSourceRequests(cocktailSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'thecocktaildb', error: err.message }); return []; })
       );
     }
     
@@ -1325,6 +1370,26 @@ app.get('/api/discover/filter/category/:category', async (req, res) => {
       );
     }
     
+    // DummyJSON filter by tag (categories map to tags)
+    const dummyjsonSource = getSourceByName(sources, 'dummyjson');
+    if (dummyjsonSource) {
+      promises.push(
+        dummyjsonFilterByTag(req.params.category)
+          .then(results => { incrementSourceRequests(dummyjsonSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'dummyjson', error: err.message }); return []; })
+      );
+    }
+    
+    // CocktailDB filter by category
+    const cocktailSource = getSourceByName(sources, 'thecocktaildb');
+    if (cocktailSource) {
+      promises.push(
+        cocktaildbFilterByCategory(req.params.category)
+          .then(results => { incrementSourceRequests(cocktailSource.id); return results; })
+          .catch(err => { warnings.push({ source: 'thecocktaildb', error: err.message }); return []; })
+      );
+    }
+    
     const resultArrays = await Promise.all(promises);
     const combined = resultArrays.flat();
     res.json({ results: combined, warnings });
@@ -1364,6 +1429,18 @@ app.get('/api/discover/filter/area/:area', async (req, res) => {
       );
     }
     
+    // DummyJSON search by cuisine/area name
+    const dummyjsonSource = getSourceByName(sources, 'dummyjson');
+    if (dummyjsonSource) {
+      promises.push(
+        dummyjsonSearch(req.params.area)
+          .then(results => { incrementSourceRequests(dummyjsonSource.id); return results.filter(r => r.cuisine_type.toLowerCase() === req.params.area.toLowerCase()); })
+          .catch(err => { warnings.push({ source: 'dummyjson', error: err.message }); return []; })
+      );
+    }
+    
+    // CocktailDB doesn't have area filtering, skip for this endpoint
+    
     const resultArrays = await Promise.all(promises);
     const combined = resultArrays.flat();
     res.json({ results: combined, warnings });
@@ -1394,6 +1471,177 @@ app.get('/api/discover/lookup/:id', async (req, res) => {
     res.status(500).json({ error: 'Failed to lookup recipe' });
   }
 });
+
+// Lookup full recipe by DummyJSON ID
+app.get('/api/discover/lookup/dummyjson/:id', async (req, res) => {
+  try {
+    const response = await fetch(`https://dummyjson.com/recipes/${req.params.id}`);
+    const data = await response.json();
+    if (!data.id) return res.status(404).json({ error: 'Recipe not found' });
+    res.json(parseDummyJSONRecipe(data));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to lookup recipe' });
+  }
+});
+
+// Lookup full drink by CocktailDB ID
+app.get('/api/discover/lookup/cocktaildb/:id', async (req, res) => {
+  try {
+    const response = await fetch(`${COCKTAILDB_BASE}/lookup.php?i=${req.params.id}`);
+    const data = await response.json();
+    if (!data.drinks || !data.drinks.length) return res.status(404).json({ error: 'Drink not found' });
+    res.json(parseCocktailDBRecipe(data.drinks[0]));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to lookup drink' });
+  }
+});
+
+// ============ DummyJSON Recipes API HELPERS ============
+
+const DUMMYJSON_BASE = 'https://dummyjson.com/recipes';
+
+function parseDummyJSONRecipe(recipe) {
+  const ingredients = (recipe.ingredients || []).map(ing => {
+    const match = ing.match(/^([\d./½¼¾⅓⅔]+)\s*([\w]+)?\s*(.*)/);
+    if (match) {
+      let q = match[1].replace('½', '.5').replace('¼', '.25').replace('¾', '.75').replace('⅓', '.33').replace('⅔', '.67');
+      if (q.includes('/')) { const [n, d] = q.split('/'); q = String(parseFloat(n) / parseFloat(d)); }
+      return { name: match[3] || ing, quantity: parseFloat(q) || 1, unit: match[2] || '', category: 'other' };
+    }
+    return { name: ing, quantity: 1, unit: '', category: 'other' };
+  });
+
+  const instructions = Array.isArray(recipe.instructions)
+    ? recipe.instructions.map((s, i) => `${i + 1}. ${s}`).join('\n')
+    : (recipe.instructions || '');
+
+  const tags = (recipe.tags || []).slice(0, 5);
+  if (recipe.cuisine) tags.push(recipe.cuisine);
+
+  return {
+    name: recipe.name || '',
+    description: `${recipe.difficulty || ''} ${recipe.cuisine || ''} recipe. ${recipe.caloriesPerServing ? recipe.caloriesPerServing + ' cal/serving.' : ''}`.trim(),
+    servings: recipe.servings || 4,
+    prep_time: recipe.prepTimeMinutes || 15,
+    cook_time: recipe.cookTimeMinutes || 30,
+    instructions,
+    tags,
+    ingredients,
+    calories: recipe.caloriesPerServing || 0, protein: 0, carbs: 0, fat: 0,
+    difficulty: (recipe.difficulty || 'medium').toLowerCase(),
+    cuisine_type: (recipe.cuisine || '').toLowerCase(),
+    recipe_type: (recipe.mealType?.[0] || 'dinner').toLowerCase(),
+    source_url: '',
+    image_url: recipe.image || '',
+    import_source: 'dummyjson',
+    source_api: 'dummyjson',
+    dummyjson_id: String(recipe.id)
+  };
+}
+
+async function dummyjsonSearch(searchQuery) {
+  const url = `${DUMMYJSON_BASE}/search?q=${encodeURIComponent(searchQuery)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`DummyJSON API error: ${response.status}`);
+  const data = await response.json();
+  return (data.recipes || []).map(parseDummyJSONRecipe);
+}
+
+async function dummyjsonRandom(count = 3) {
+  const skip = Math.floor(Math.random() * 47);
+  const url = `${DUMMYJSON_BASE}?limit=${count}&skip=${skip}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`DummyJSON API error: ${response.status}`);
+  const data = await response.json();
+  return (data.recipes || []).map(parseDummyJSONRecipe);
+}
+
+async function dummyjsonFilterByTag(tag) {
+  const url = `${DUMMYJSON_BASE}/tag/${encodeURIComponent(tag)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`DummyJSON API error: ${response.status}`);
+  const data = await response.json();
+  return (data.recipes || []).map(parseDummyJSONRecipe);
+}
+
+// ============ TheCocktailDB API HELPERS ============
+
+const COCKTAILDB_BASE = 'https://www.thecocktaildb.com/api/json/v1/1';
+
+function parseCocktailDBRecipe(drink) {
+  const ingredients = [];
+  for (let i = 1; i <= 15; i++) {
+    const name = drink[`strIngredient${i}`];
+    const measure = drink[`strMeasure${i}`];
+    if (name && name.trim()) {
+      const measureStr = (measure || '').trim();
+      const qtyMatch = measureStr.match(/^([\d./½¼¾⅓⅔]+)\s*(.*)/);
+      let quantity = 1;
+      let unit = measureStr;
+      if (qtyMatch) {
+        let q = qtyMatch[1].replace('½', '.5').replace('¼', '.25').replace('¾', '.75').replace('⅓', '.33').replace('⅔', '.67');
+        if (q.includes('/')) {
+          const [num, den] = q.split('/');
+          quantity = parseFloat(num) / parseFloat(den);
+        } else {
+          quantity = parseFloat(q) || 1;
+        }
+        unit = qtyMatch[2] || '';
+      }
+      ingredients.push({ name: name.trim(), quantity, unit, category: 'other' });
+    }
+  }
+
+  const tags = drink.strTags ? drink.strTags.split(',').map(t => t.trim()).filter(Boolean) : [];
+  if (drink.strCategory) tags.push(drink.strCategory);
+  tags.push('cocktail', 'drink');
+
+  return {
+    name: drink.strDrink || '',
+    description: `${drink.strCategory || 'Cocktail'} — ${drink.strAlcoholic || ''}.`.trim(),
+    servings: 1,
+    prep_time: 5,
+    cook_time: 0,
+    instructions: drink.strInstructions || '',
+    tags,
+    ingredients,
+    calories: 0, protein: 0, carbs: 0, fat: 0,
+    difficulty: 'easy',
+    cuisine_type: '',
+    recipe_type: 'drink',
+    source_url: '',
+    image_url: drink.strDrinkThumb || '',
+    import_source: 'thecocktaildb',
+    source_api: 'thecocktaildb',
+    cocktaildb_id: drink.idDrink
+  };
+}
+
+async function cocktaildbSearch(searchQuery) {
+  const url = `${COCKTAILDB_BASE}/search.php?s=${encodeURIComponent(searchQuery)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`CocktailDB API error: ${response.status}`);
+  const data = await response.json();
+  return (data.drinks || []).map(parseCocktailDBRecipe);
+}
+
+async function cocktaildbRandom(count = 2) {
+  const promises = Array.from({ length: count }, () =>
+    fetch(`${COCKTAILDB_BASE}/random.php`).then(r => r.json()).then(d => d.drinks?.[0]).catch(() => null)
+  );
+  const results = await Promise.all(promises);
+  return results.filter(Boolean).map(parseCocktailDBRecipe);
+}
+
+async function cocktaildbFilterByCategory(category) {
+  const url = `${COCKTAILDB_BASE}/filter.php?c=${encodeURIComponent(category)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`CocktailDB API error: ${response.status}`);
+  const data = await response.json();
+  return (data.drinks || []).map(d => ({
+    cocktaildb_id: d.idDrink, name: d.strDrink, image_url: d.strDrinkThumb, source_api: 'thecocktaildb'
+  }));
+}
 
 // ============ RECIPE IMPORT FROM URL ============
 
@@ -1574,3 +1822,9 @@ app.listen(PORT, () => {
 
 // Remove Edamam source (no longer supported)
 query("DELETE FROM api_sources WHERE id = 'edamam'").catch(() => {});
+
+// Seed new built-in sources (DummyJSON, TheCocktailDB)
+query("INSERT OR IGNORE INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ['dummyjson', 'DummyJSON', 'https://dummyjson.com/recipes', '', 1, '🧪', 'Free mock recipe API with 50 recipes. No API key required.', 0]).catch(() => {});
+query("INSERT OR IGNORE INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ['thecocktaildb', 'TheCocktailDB', 'https://www.thecocktaildb.com/api/json/v1/1', '', 1, '🍸', 'Free cocktail and drink recipe database. No API key required.', 0]).catch(() => {});
