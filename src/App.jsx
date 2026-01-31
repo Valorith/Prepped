@@ -3,6 +3,7 @@ import WeeklyPlanner from './components/enhanced-WeeklyPlanner.jsx'
 import RecipeManager from './components/enhanced-RecipeManager.jsx'
 import ShoppingList from './components/enhanced-ShoppingList.jsx'
 import Dashboard from './components/Dashboard.jsx'
+import ApiManager from './components/ApiManager.jsx'
 import Toast from './components/Toast.jsx'
 import './styles/design-system.css'
 
@@ -10,7 +11,8 @@ const tabs = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'planner', label: 'Meal Plan', icon: '🗓️' },
   { id: 'recipes', label: 'Recipes', icon: '👨‍🍳' },
-  { id: 'shopping', label: 'Shopping', icon: '🛒' }
+  { id: 'shopping', label: 'Shopping', icon: '🛒' },
+  { id: 'settings', label: 'Settings', icon: '⚙️' }
 ]
 
 export default function App() {
@@ -96,6 +98,7 @@ export default function App() {
         {activeTab === 'planner' && <WeeklyPlanner addToast={addToast} isMobile={isMobile} />}
         {activeTab === 'recipes' && <RecipeManager addToast={addToast} isMobile={isMobile} />}
         {activeTab === 'shopping' && <ShoppingList addToast={addToast} isMobile={isMobile} />}
+        {activeTab === 'settings' && <ApiManager addToast={addToast} />}
       </main>
 
       {/* Toast Notifications */}

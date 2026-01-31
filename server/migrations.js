@@ -177,6 +177,35 @@ export async function runMigrations() {
         INSERT INTO migrations (version) VALUES (2);
       `);
     }
+
+    if (currentVersion < 3) {
+      console.log('Running migration 3: Create api_sources table');
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS api_sources (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          base_url TEXT NOT NULL DEFAULT '',
+          api_key TEXT DEFAULT '',
+          enabled BOOLEAN DEFAULT FALSE,
+          icon TEXT DEFAULT '🔌',
+          description TEXT DEFAULT '',
+          free_tier_limit INTEGER DEFAULT 0,
+          requests_today INTEGER DEFAULT 0,
+          last_tested TIMESTAMP,
+          test_status TEXT DEFAULT '',
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+
+        INSERT INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES
+          ('themealdb', 'TheMealDB', 'https://www.themealdb.com/api/json/v1/1', '', TRUE, '🍽️', 'Free recipe database with thousands of meals. No API key required.', 0),
+          ('spoonacular', 'Spoonacular', 'https://api.spoonacular.com', '', FALSE, '🥄', 'Comprehensive food API with nutrition data, meal planning, and recipe analysis. Free tier: 150 requests/day.', 150),
+          ('edamam', 'Edamam', 'https://api.edamam.com', '', FALSE, '🥗', 'Recipe search and nutrition analysis API. Requires app_id and app_key. Free tier available.', 100)
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO migrations (version) VALUES (3);
+      `);
+    }
     
     console.log('PostgreSQL migrations completed successfully');
   } catch (error) {
@@ -297,6 +326,34 @@ function runSQLiteMigrations(db) {
       ALTER TABLE recipes ADD COLUMN import_source TEXT DEFAULT '';
       
       PRAGMA user_version = 6;
+    `);
+  }
+
+  if (currentVersion < 7) {
+    console.log('Running migration 7: Create api_sources table');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS api_sources (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        base_url TEXT NOT NULL DEFAULT '',
+        api_key TEXT DEFAULT '',
+        enabled INTEGER DEFAULT 0,
+        icon TEXT DEFAULT '🔌',
+        description TEXT DEFAULT '',
+        free_tier_limit INTEGER DEFAULT 0,
+        requests_today INTEGER DEFAULT 0,
+        last_tested TEXT,
+        test_status TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+
+      INSERT OR IGNORE INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES
+        ('themealdb', 'TheMealDB', 'https://www.themealdb.com/api/json/v1/1', '', 1, '🍽️', 'Free recipe database with thousands of meals. No API key required.', 0),
+        ('spoonacular', 'Spoonacular', 'https://api.spoonacular.com', '', 0, '🥄', 'Comprehensive food API with nutrition data, meal planning, and recipe analysis. Free tier: 150 requests/day.', 150),
+        ('edamam', 'Edamam', 'https://api.edamam.com', '', 0, '🥗', 'Recipe search and nutrition analysis API. Requires app_id and app_key. Free tier available.', 100);
+
+      PRAGMA user_version = 7;
     `);
   }
 }

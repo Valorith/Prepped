@@ -890,6 +890,161 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
+// ============ API SOURCES SETTINGS ============
+
+app.get('/api/settings/api-sources', async (req, res) => {
+  try {
+    const sources = await query('SELECT * FROM api_sources ORDER BY name', []);
+    // Mask API keys in response
+    const masked = sources.map(s => ({
+      ...s,
+      api_key_set: !!(s.api_key && s.api_key.trim()),
+      api_key: s.api_key ? '••••••••' + s.api_key.slice(-4) : '',
+      enabled: pool ? s.enabled : !!s.enabled
+    }));
+    res.json(masked);
+  } catch (error) {
+    handleError(error, req, res);
+  }
+});
+
+app.put('/api/settings/api-sources/:id', async (req, res) => {
+  try {
+    const { enabled, api_key, name, base_url, icon, description, free_tier_limit } = req.body;
+    const updates = [];
+    const params = [];
+
+    if (enabled !== undefined) {
+      updates.push('enabled = ?');
+      params.push(pool ? enabled : (enabled ? 1 : 0));
+    }
+    if (api_key !== undefined) {
+      updates.push('api_key = ?');
+      params.push(api_key);
+    }
+    if (name !== undefined) { updates.push('name = ?'); params.push(name); }
+    if (base_url !== undefined) { updates.push('base_url = ?'); params.push(base_url); }
+    if (icon !== undefined) { updates.push('icon = ?'); params.push(icon); }
+    if (description !== undefined) { updates.push('description = ?'); params.push(description); }
+    if (free_tier_limit !== undefined) { updates.push('free_tier_limit = ?'); params.push(free_tier_limit); }
+
+    if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
+
+    updates.push(pool ? 'updated_at = NOW()' : "updated_at = datetime('now')");
+    params.push(req.params.id);
+
+    await query(`UPDATE api_sources SET ${updates.join(', ')} WHERE id = ?`, params);
+    
+    const sources = await query('SELECT * FROM api_sources WHERE id = ?', [req.params.id]);
+    if (!sources.length) return res.status(404).json({ error: 'Source not found' });
+    
+    const s = sources[0];
+    res.json({ ...s, api_key_set: !!(s.api_key && s.api_key.trim()), api_key: s.api_key ? '••••••••' + s.api_key.slice(-4) : '', enabled: pool ? s.enabled : !!s.enabled });
+  } catch (error) {
+    handleError(error, req, res);
+  }
+});
+
+app.post('/api/settings/api-sources', async (req, res) => {
+  try {
+    const { name, base_url, api_key, icon, description, free_tier_limit } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+
+    const id = uuidv4();
+    await query('INSERT INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [
+      id, name, base_url || '', api_key || '', pool ? false : 0, icon || '🔌', description || '', free_tier_limit || 0
+    ]);
+
+    const sources = await query('SELECT * FROM api_sources WHERE id = ?', [id]);
+    const s = sources[0];
+    res.status(201).json({ ...s, api_key_set: !!(s.api_key && s.api_key.trim()), api_key: s.api_key ? '••••••••' + s.api_key.slice(-4) : '', enabled: pool ? s.enabled : !!s.enabled });
+  } catch (error) {
+    handleError(error, req, res);
+  }
+});
+
+app.post('/api/settings/api-sources/:id/test', async (req, res) => {
+  try {
+    const sources = await query('SELECT * FROM api_sources WHERE id = ?', [req.params.id]);
+    if (!sources.length) return res.status(404).json({ error: 'Source not found' });
+
+    const source = sources[0];
+    let success = false;
+    let message = '';
+    const startTime = Date.now();
+
+    try {
+      if (source.id === 'themealdb' || source.base_url.includes('themealdb.com')) {
+        const resp = await fetch(`${source.base_url}/search.php?s=chicken`, { signal: AbortSignal.timeout(8000) });
+        const data = await resp.json();
+        success = resp.ok && data.meals && data.meals.length > 0;
+        message = success ? `Connected! Found ${data.meals.length} recipes.` : 'Connected but no results returned.';
+      } else if (source.id === 'spoonacular' || source.base_url.includes('spoonacular.com')) {
+        if (!source.api_key) { success = false; message = 'API key required.'; }
+        else {
+          const resp = await fetch(`${source.base_url}/recipes/random?number=1&apiKey=${source.api_key}`, { signal: AbortSignal.timeout(8000) });
+          if (resp.status === 401 || resp.status === 403) { success = false; message = 'Invalid API key.'; }
+          else { const data = await resp.json(); success = resp.ok && data.recipes?.length > 0; message = success ? 'Connected successfully!' : 'Connected but unexpected response.'; }
+        }
+      } else if (source.id === 'edamam' || source.base_url.includes('edamam.com')) {
+        if (!source.api_key) { success = false; message = 'API key (app_id|app_key format) required.'; }
+        else {
+          const [appId, appKey] = source.api_key.split('|');
+          if (!appId || !appKey) { success = false; message = 'Key format: app_id|app_key'; }
+          else {
+            const resp = await fetch(`${source.base_url}/api/recipes/v2?type=public&q=chicken&app_id=${appId}&app_key=${appKey}`, { signal: AbortSignal.timeout(8000) });
+            success = resp.ok;
+            message = success ? 'Connected successfully!' : `Error: ${resp.status}`;
+          }
+        }
+      } else {
+        // Custom source — just try a GET
+        const resp = await fetch(source.base_url, { signal: AbortSignal.timeout(8000) });
+        success = resp.ok;
+        message = success ? `Connected! Status: ${resp.status}` : `Failed: ${resp.status}`;
+      }
+    } catch (err) {
+      success = false;
+      message = `Connection failed: ${err.message}`;
+    }
+
+    const latency = Date.now() - startTime;
+    const testStatus = success ? 'success' : 'failed';
+
+    const updateSql = pool
+      ? "UPDATE api_sources SET last_tested = NOW(), test_status = $1, updated_at = NOW() WHERE id = $2"
+      : "UPDATE api_sources SET last_tested = datetime('now'), test_status = ?, updated_at = datetime('now') WHERE id = ?";
+    await query(updateSql, [testStatus, req.params.id]);
+
+    res.json({ success, message, latency_ms: latency, test_status: testStatus });
+  } catch (error) {
+    handleError(error, req, res);
+  }
+});
+
+app.delete('/api/settings/api-sources/:id', async (req, res) => {
+  try {
+    // Don't allow deleting default sources
+    const builtIn = ['themealdb', 'spoonacular', 'edamam'];
+    if (builtIn.includes(req.params.id)) {
+      return res.status(400).json({ error: 'Cannot delete built-in API sources' });
+    }
+    const result = await query('DELETE FROM api_sources WHERE id = ?', [req.params.id]);
+    if ((pool && result.length === 0) || (!pool && result.changes === 0)) {
+      return res.status(404).json({ error: 'Source not found' });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(error, req, res);
+  }
+});
+
+// Helper: get enabled sources
+async function getEnabledSources() {
+  const enabledVal = pool ? 'true' : '1';
+  return await query(`SELECT * FROM api_sources WHERE enabled = ${enabledVal}`, []);
+}
+
 // ============ TheMealDB API PROXY ============
 
 const MEALDB_BASE = 'https://www.themealdb.com/api/json/v1/1';
