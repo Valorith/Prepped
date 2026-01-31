@@ -1824,7 +1824,11 @@ app.listen(PORT, () => {
 query("DELETE FROM api_sources WHERE id = 'edamam'").catch(() => {});
 
 // Seed new built-in sources (DummyJSON, TheCocktailDB)
-query("INSERT OR IGNORE INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-  ['dummyjson', 'DummyJSON', 'https://dummyjson.com/recipes', '', 1, '🧪', 'Free mock recipe API with 50 recipes. No API key required.', 0]).catch(() => {});
-query("INSERT OR IGNORE INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-  ['thecocktaildb', 'TheCocktailDB', 'https://www.thecocktaildb.com/api/json/v1/1', '', 1, '🍸', 'Free cocktail and drink recipe database. No API key required.', 0]).catch(() => {});
+// Use DB-appropriate upsert syntax
+const insertIgnoreSql = pool
+  ? "INSERT INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING"
+  : "INSERT OR IGNORE INTO api_sources (id, name, base_url, api_key, enabled, icon, description, free_tier_limit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+query(insertIgnoreSql,
+  ['dummyjson', 'DummyJSON', 'https://dummyjson.com/recipes', '', true, '🧪', 'Free mock recipe API with 50 recipes. No API key required.', 0]).catch((e) => console.error('Seed dummyjson:', e.message));
+query(insertIgnoreSql,
+  ['thecocktaildb', 'TheCocktailDB', 'https://www.thecocktaildb.com/api/json/v1/1', '', true, '🍸', 'Free cocktail and drink recipe database. No API key required.', 0]).catch((e) => console.error('Seed cocktaildb:', e.message));
