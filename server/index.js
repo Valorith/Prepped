@@ -1645,6 +1645,39 @@ async function cocktaildbFilterByCategory(category) {
 
 // ============ RECIPE IMPORT FROM URL ============
 
+// Robust image extraction for recipe import
+function extractImage(recipe, $) {
+  // 1. Try recipe.image from JSON-LD (multiple formats)
+  if (recipe?.image) {
+    const img = recipe.image;
+    // Direct string URL
+    if (typeof img === 'string' && img.startsWith('http')) return img;
+    // ImageObject with url
+    if (img.url) return img.url;
+    // Array of strings or ImageObjects
+    if (Array.isArray(img)) {
+      for (const item of img) {
+        if (typeof item === 'string' && item.startsWith('http')) return item;
+        if (item?.url) return item.url;
+      }
+    }
+  }
+  // 2. Try recipe.thumbnailUrl
+  if (recipe?.thumbnailUrl) return recipe.thumbnailUrl;
+  // 3. Fallback to Open Graph meta tag
+  if ($) {
+    const ogImage = $('meta[property="og:image"]').attr('content');
+    if (ogImage) return ogImage;
+    // 4. Twitter card image
+    const twitterImage = $('meta[name="twitter:image"]').attr('content');
+    if (twitterImage) return twitterImage;
+    // 5. First large image in article/main content
+    const mainImg = $('article img[src], main img[src], .recipe img[src]').first().attr('src');
+    if (mainImg) return mainImg;
+  }
+  return '';
+}
+
 app.post('/api/recipes/import-url', async (req, res) => {
   try {
     const { url } = req.body;
@@ -1746,7 +1779,7 @@ app.post('/api/recipes/import-url', async (req, res) => {
       cuisine_type: Array.isArray(recipe.recipeCuisine) ? recipe.recipeCuisine[0] : (recipe.recipeCuisine || ''),
       recipe_type: 'dinner',
       source_url: url,
-      image_url: typeof recipe.image === 'string' ? recipe.image : (Array.isArray(recipe.image) ? recipe.image[0] : (recipe.image?.url || ''))
+      image_url: extractImage(recipe, $)
     };
 
     res.json(parsed);
